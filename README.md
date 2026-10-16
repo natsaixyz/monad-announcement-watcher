@@ -1,76 +1,52 @@
 # Monad Announcement Watcher
 
-Automatically verify new [Monad Foundation announcements](https://github.com/monad-crypto/mf-nodeops-comms/tree/main/announcements) with **local GnuPG**, then notify **Discord, Telegram, and/or a JSON webhook**.
+Verify new [Monad Foundation announcements](https://github.com/monad-crypto/mf-nodeops-comms/tree/main/announcements) with **local GnuPG**, then notify **Discord, Telegram, and/or a JSON webhook**. Headless; no inbound ports, website, or validator access.
 
-**Want the website instead?** [Monad Announcement Verifier](https://github.com/natsaixyz/monad-announcement-verifier) · [Live verifier](https://monad-verify.natsai.xyz)
+Want to check announcements manually? **[Web verifier](https://github.com/natsaixyz/monad-announcement-verifier)** · [Live site](https://monad-verify.natsai.xyz).
 
-## Install (Docker)
+## Install
 
-Requirements: Docker and Docker Compose. No domain, inbound ports, validator access, or website required.
+Requires Docker and Docker Compose.
 
 ```bash
 git clone https://github.com/natsaixyz/monad-announcement-watcher.git
 cd monad-announcement-watcher
 cp .env.example .env
-nano .env                       # Set at least one destination; see below
+nano .env  # configure at least one destination
 chmod 600 .env
 docker compose up -d --build
 ```
 
-**Choose any combination** in `.env`; leave unused values empty:
+Set any combination in `.env`; leave unused destinations empty:
 
-| Destination | Settings |
+| Destination | Variables |
 | --- | --- |
 | Discord | `DISCORD_WEBHOOK_URL` |
-| Telegram | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` |
-| Any HTTPS endpoint | `CUSTOM_WEBHOOK_URL`; optional `CUSTOM_WEBHOOK_SECRET` |
+| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| JSON webhook | `CUSTOM_WEBHOOK_URL`, optional `CUSTOM_WEBHOOK_SECRET` ([payload](WEBHOOK.md)) |
+
+**Telegram:** Create a bot via [@BotFather](https://t.me/BotFather), message it `/start`, then find the chat ID with:
 
 ```bash
-# One-time test without GPG checks or changing watcher history
-docker compose run --rm watcher python watcher.py --test all
+docker compose run --rm watcher python watcher.py --telegram-chat-id
+```
 
-# Status and logs
+Set `TELEGRAM_CHAT_ID` in `.env`. For channels, add the bot with posting permission.
+
+## Test & operate
+
+```bash
+docker compose run --rm watcher python watcher.py --test all  # configured destinations only; no state changes
 docker compose ps
 docker compose logs --tail=30 watcher
 ```
 
-`--test all` tests **only configured** destinations. You can instead use `--test discord`, `--test telegram`, or `--test webhook`.
+Polls public GitHub every 5 minutes; checks **2 distinct authorized GPG signatures** using [`config.json`](config.json). Independently verify pinned keys against [Monad's official list](https://docs.monad.xyz/node-ops/gpg-keys.json). It alerts on new or changed announcements and verification failures, and retries destinations independently.
 
-### Telegram setup (Telegram Web is fine)
+First run reports the latest announcement (`START_MODE=latest`). Delivery history persists in a Docker volume; **don't use `docker compose down -v`** unless resetting history is intentional.
 
-1. In Telegram, talk to [@BotFather](https://t.me/BotFather), send `/newbot`, and copy your new **bot token** into `.env` as `TELEGRAM_BOT_TOKEN`. Never commit this token.
-2. Open your bot's chat and send `/start` (for a group, add the bot and send a message addressing it). Find the chat ID:
-   ```bash
-   docker compose run --rm watcher python watcher.py --telegram-chat-id
-   ```
-3. Set `TELEGRAM_CHAT_ID` in `.env`, then run `docker compose up -d --build` and `docker compose run --rm watcher python watcher.py --test telegram`.
+**Scope:** Public GitHub only; restricted email-only CODE RED is not monitored. No commands are executed. Not an official Monad Foundation tool.
 
-For a Telegram channel, add your bot as an administrator with posting permission; `@publicchannelusername` can be used as `TELEGRAM_CHAT_ID`.
-
-### Custom webhook
-
-Set `CUSTOM_WEBHOOK_URL=https://your-domain.example/monad-alerts`. The watcher POSTs a [documented JSON payload](WEBHOOK.md). Optionally set `CUSTOM_WEBHOOK_SECRET` (16+ characters) to add an `X-Monad-Signature: sha256=...` HMAC over the exact request body. No redirects are followed. Test with `--test webhook`.
-
-## Operation
-
-- Polls Monad's **public GitHub** announcements every 5 minutes (`CHECK_INTERVAL_SECONDS=300`). New or edited `mf-N` files are **verified locally** with two distinct, pinned authorized signer keys before reporting success.
-- First start (`START_MODE=latest`) reports the latest valid announcement and silently records older valid ones. `START_MODE=silent` skips initial success notifications. **Failed verification is never silently accepted.**
-- Stores delivered events in a persistent Docker volume; **each destination has independent retry/deduplication state**. New destinations do not receive historical alerts. A crash between delivery and state save may cause a duplicate; `event_id` lets custom webhook consumers deduplicate.
-- Status is **VERIFIED** or **FAILED**. The watcher never executes announcement instructions. GitHub download errors are logged, not misreported as signature failures.
-- Stops with `docker compose down` (keeps state). **Do not use `down -v`** unless you want to reset history.
-
-Trusted Monad public-key fingerprints are pinned in [`config.json`](config.json), not blindly accepted from GitHub. Verify them independently against [Monad's official list](https://docs.monad.xyz/node-ops/gpg-keys.json) before relying on the watcher. Key rotation requires deliberate review and a config update.
-
-**Scope:** public GitHub announcements only. Private email-only CODE RED communications are not monitored. This community-maintained project is **not an official Monad Foundation tool** and should complement, not replace, official operator channels.
-
-## Tests
-
-```bash
-# Python 3.11+ and gpg required
-gpg --version
-python3 -m unittest discover -s tests -v
-```
-
-All tests run offline with local signed fixtures and mocked notification delivery. No third-party Python packages are required.
+Tests (Python 3.11+ and GnuPG): `python3 -m unittest discover -s tests -q`.
 
 MIT · © 2026 Natsai OÜ
