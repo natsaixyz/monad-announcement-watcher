@@ -1,0 +1,20 @@
+name: monad-announcement-watcher
+services:
+  watcher:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - watcher_state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 96
+    mem_limit: 256m
+volumes:
+  watcher_state:
