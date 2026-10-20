@@ -13,13 +13,16 @@ Example for a verified announcement:
   "announcement": {
     "id": "mf-2",
     "number": 2,
+    "number_source": "repository_folder",
     "url": "https://github.com/monad-crypto/mf-nodeops-comms/tree/main/announcements/mf-2",
-    "created": "2026-10-16 05:45 UTC",
-    "severity": "ORANGE",
+    "created": null,
+    "severity": null,
     "sha256": "<sha256 of length-prefixed announcement.txt and announcement.sig bytes>"
   },
   "verification": {
     "status": "VERIFIED",
+    "scope": "signatures_only",
+    "metadata_checked": false,
     "signers": ["<40-character GPG fingerprint>", "<40-character GPG fingerprint>"],
     "error": null
   },
@@ -32,7 +35,9 @@ Values:
 - `event_type`: `monad.announcement.verification` or `monad.announcement.test`.
 - `change`: `NEW`, `CHANGED`, `RECOVERED`, or `TEST`.
 - `verification.status`: `VERIFIED`, `FAILED`, or `TEST`.
-- `announcement.severity`: `GREEN`, `ORANGE`, `RED` **only when VERIFIED**; otherwise `null`.
+- `announcement.created` and `announcement.severity`: always `null`; announcement text is not parsed.
+- `announcement.number_source`: `repository_folder` (or `null` for tests). Folder IDs do not authenticate the number in the signed message.
+- `verification.scope`: `signatures_only` (or `null` for tests). `metadata_checked` is `false`: operators must review dates, expiry and instructions. A valid signature is not permission to execute an instruction.
 - `verification.signers`: list of full authorized primary-key fingerprints when VERIFIED; otherwise `[]`.
 - `verification.error`: error description when FAILED; otherwise `null`.
 - Test deliveries use `null` announcement identifiers and `verification.status=TEST`; **no announcement is verified by a test**.

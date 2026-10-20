@@ -117,9 +117,11 @@ class WatcherTests(unittest.TestCase):
     def test_discovery_ignores_incomplete_folders(self):
         self.assertEqual(set(discover(archive({0: "a", 4: "b"}))), {0, 4})
 
-    def test_verified_red_is_red_alert(self):
+    def test_verified_label_is_signature_only(self):
         body = DiscordNotifier.payload(Event(3, "VERIFIED", "NEW", "RED", signers=("A"*40, "B"*40)))
-        self.assertIn("CODE RED", body["embeds"][0]["title"])
+        self.assertIn("GPG SIGNATURES VERIFIED", body["embeds"][0]["title"])
+        self.assertNotIn("CODE RED", body["embeds"][0]["title"])
+        self.assertIn("Signatures only", body["embeds"][0]["footer"]["text"])
         self.assertEqual(body["allowed_mentions"], {"parse": []})
         self.assertNotIn("content", body)
 

@@ -53,8 +53,8 @@ class DiscordNotifier:
     @staticmethod
     def payload(event: Event) -> dict:
         if event.status == "VERIFIED":
-            color = {"GREEN": 0x2E865F, "ORANGE": 0xE29C39, "RED": 0xCC4444}.get(event.severity, 0x477CB5)
-            label = f"GPG VERIFIED · CODE {event.severity}" if event.severity != "UNCLASSIFIED" else "GPG VERIFIED"
+            color = 0x2E865F
+            label = "GPG SIGNATURES VERIFIED"
             desc = "Two or more authorized Monad Foundation signatures verified locally."
         elif event.status == "TEST":
             color = 0x477CB5
@@ -62,7 +62,7 @@ class DiscordNotifier:
             desc = "Discord delivery is working. No announcement was verified by this test."
         else:
             color = 0xD14949
-            label = "GPG VERIFICATION FAILED"
+            label = "VERIFICATION FAILED"
             desc = "Do not act on this announcement until independently verified."
         fields = [{"name": "Event", "value": event.kind, "inline": True}]
         if event.created:
@@ -71,9 +71,9 @@ class DiscordNotifier:
             fields.append({"name": "Authorized signers", "value": f"{len(event.signers)} distinct · " + ", ".join(x[:8] + "…" + x[-8:] for x in event.signers), "inline": False})
         if event.reason:
             fields.append({"name": "Reason", "value": event.reason[:350], "inline": False})
-        title = f"MF Announcement #{event.number} · {label}" if event.status != "TEST" else label
+        title = f"mf-{event.number} · {label}" if event.status != "TEST" else label
         url = f"https://github.com/monad-crypto/mf-nodeops-comms/tree/main/announcements/mf-{event.number}"
-        embed = {"title": title, "description": desc, "color": color, "fields": fields, "footer": {"text": "Natsai · local GPG verification · no actions executed"}}
+        embed = {"title": title, "description": desc, "color": color, "fields": fields, "footer": {"text": "Signatures only · review dates and instructions · no actions executed"}}
         if event.status != "TEST":
             embed["url"] = url
         return {"username": "Monad Announcement Watcher", "allowed_mentions": {"parse": []}, "embeds": [embed]}
@@ -113,18 +113,18 @@ class TelegramNotifier:
         if event.status == "TEST":
             return "MONAD WATCHER TEST — NOT AN ANNOUNCEMENT\nTelegram delivery works. No GPG verification was performed."
         if event.status == "VERIFIED":
-            status = "GPG VERIFIED" + (f" · CODE {event.severity}" if event.severity != "UNCLASSIFIED" else "")
+            status = "GPG SIGNATURES VERIFIED"
             info = f"{len(event.signers)} distinct authorized Monad signers"
         else:
-            status = "GPG VERIFICATION FAILED"
+            status = "VERIFICATION FAILED"
             info = "Do not act on this announcement before independent verification."
-        parts = [f"MF Announcement #{event.number} — {status}", f"Event: {event.kind}", info]
+        parts = [f"mf-{event.number} — {status}", f"Event: {event.kind}", info]
         if event.created:
             parts.append(f"Created: {event.created[:128]}")
         if event.reason:
             parts.append(f"Reason: {event.reason[:350]}")
         parts.append(f"https://github.com/monad-crypto/mf-nodeops-comms/tree/main/announcements/mf-{event.number}")
-        parts.append("Natsai · local GPG · no commands executed")
+        parts.append("Signatures only · review dates and instructions · no commands executed")
         return "\n".join(parts)
 
     @staticmethod
@@ -228,13 +228,16 @@ class CustomWebhookNotifier:
             "announcement": {
                 "id": f"mf-{event.number}" if event.status != "TEST" else None,
                 "number": event.number if event.status != "TEST" else None,
+                "number_source": "repository_folder" if event.status != "TEST" else None,
                 "url": url if event.status != "TEST" else None,
-                "created": event.created or None,
-                "severity": event.severity if event.status == "VERIFIED" else None,
+                "created": None,
+                "severity": None,
                 "sha256": event.digest or None,
             },
             "verification": {
                 "status": event.status,
+                "scope": "signatures_only" if event.status != "TEST" else None,
+                "metadata_checked": False,
                 "signers": list(event.signers),
                 "error": event.reason or None,
             },

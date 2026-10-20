@@ -45,6 +45,8 @@ Polls public GitHub every 5 minutes; checks **2 distinct authorized GPG signatur
 
 First run reports the latest announcement (`START_MODE=latest`). Delivery history persists in a Docker volume; **don't use `docker compose down -v`** unless resetting history is intentional.
 
+**Verification:** GnuPG checks the original files against at least two distinct pinned authorized primary keys. Announcement text is not parsed. Dates, expiry, severity and the message/folder number match are **not checked**; operators must review the signed message before acting. Folder IDs are source locations, not authenticated announcement numbers.
+
 **Scope:** Public GitHub only; restricted email-only CODE RED is not monitored. No commands are executed. Not an official Monad Foundation tool.
 
 Tests (Python 3.11+ and GnuPG): `python3 -m unittest discover -s tests -q`.

@@ -1,6 +1,7 @@
 """Offline cryptographic tests using temporary signing keys (no Monad keys or network)."""
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import subprocess
@@ -50,26 +51,22 @@ class ParsingTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(VerificationError):
                 parse_number(value)
 
-    def test_index_and_utc_timestamp(self):
-        content = b'MF Announcement #1\n\nCreated: 2026-10-16T05:45:00UTC\n\nCODE GREEN: TEST\n'
-        self.assertEqual(inspect_announcement(content, 1)['severity'], 'GREEN')
-        with self.assertRaises(VerificationError):
-            inspect_announcement(content, 2)
+    def test_display_does_not_parse_header_or_dates(self):
+        content = b'Announcement #3\nCreated: not-an-ISO-date\nCODE RED\nCODE GREEN\n'
+        display = inspect_announcement(content, 3)
+        self.assertEqual(display['message'], content.decode())
+        self.assertEqual(display['number'], 3)
+        self.assertEqual(display['created'], '')
+        self.assertIsNone(display['expires'])
+        self.assertEqual(display['severity'], 'UNCLASSIFIED')
 
-    def test_future_timestamp_rejected(self):
-        future = (datetime.now(timezone.utc) + timedelta(days=3)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        with self.assertRaisesRegex(VerificationError, 'future'):
-            inspect_announcement(f'MF Announcement #1\nCreated: {future}\n'.encode(), 1)
+    def test_display_never_claims_signature_success(self):
+        self.assertNotIn('ok', inspect_announcement(b'arbitrary unverified data', 3))
 
-    def test_expired_timestamp_rejected(self):
-        content = b'MF Announcement #1\nCreated: 2026-01-01T01:00:00Z\nExpires: 2026-01-02T01:00:00Z\n'
-        with self.assertRaisesRegex(VerificationError, 'expired'):
-            inspect_announcement(content, 1)
-
-    def test_conflicting_severities_rejected(self):
-        content = b'MF Announcement #1\nCreated: 2026-01-01T01:00:00Z\nCODE RED\nCODE GREEN\n'
-        with self.assertRaisesRegex(VerificationError, 'conflicting'):
-            inspect_announcement(content, 1)
+    def test_display_invalid_utf8_does_not_mutate_original(self):
+        content = b'\xffunusual text'
+        self.assertIn('unusual text', inspect_announcement(content, 3)['message'])
+        self.assertEqual(content, b'\xffunusual text')
 
     def test_config_fingerprints_are_pinned(self):
         config = load_config(Path(__file__).resolve().parent.parent / 'config.json')
@@ -141,12 +138,12 @@ class GPGTests(unittest.TestCase):
             combined += dest.read_bytes()
         return combined
 
-    def fixture_zip(self, message: bytes, signature: bytes, keys: list[bytes] | None = None) -> bytes:
+    def fixture_zip(self, message: bytes, signature: bytes, keys: list[bytes] | None = None, number: int = 1) -> bytes:
         output = io.BytesIO()
         with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             prefix = 'mf-nodeops-comms-main/'
-            archive.writestr(prefix + 'announcements/mf-1/announcement.txt', message)
-            archive.writestr(prefix + 'announcements/mf-1/announcement.sig', signature)
+            archive.writestr(prefix + f'announcements/mf-{number}/announcement.txt', message)
+            archive.writestr(prefix + f'announcements/mf-{number}/announcement.sig', signature)
             for index, key in enumerate(keys if keys is not None else self.keys):
                 archive.writestr(prefix + f'keys/signer-{index}.pub.asc', key)
         return output.getvalue()
@@ -156,7 +153,66 @@ class GPGTests(unittest.TestCase):
         verified = verify_announcement(1, self.config, self.fixture_zip(self.message, signature))
         self.assertTrue(verified['ok'])
         self.assertEqual(set(verified['signers']), set(self.fps[:2]))
-        self.assertEqual(verified['severity'], 'GREEN')
+        self.assertEqual(verified['severity'], 'UNCLASSIFIED')
+        self.assertEqual(verified['verification_scope'], 'signatures_only')
+        self.assertFalse(verified['metadata_checked'])
+
+
+    def test_mf3_header_regression_real_gpg(self):
+        # Reproduces the supplied header; uses local test keys, not Monad's signatures.
+        content = b'Announcement #3\n\nCreated: 2026-09-09T05:06:00Z\n\nLocal test fixture.\n'
+        sig = self.sign(content)
+        result = verify_announcement(3, self.config, self.fixture_zip(content, sig, number=3))
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['message'], content.decode())
+        self.assertEqual(result['message_sha256'], hashlib.sha256(content).hexdigest())
+        self.assertEqual(result['number_source'], 'repository_folder')
+
+    def test_body_format_does_not_decide_signature_validity(self):
+        contents = [
+            b'No announcement heading or dates.\n',
+            b'Announcement #99\nCreated: not a date\n',
+            b'MF Announcement #1\nCreated: 2999-01-01T00:00:00Z\n',
+            b'Expires: 2000-01-01T00:00:00Z\nCODE RED\nCODE GREEN\n',
+            b'Created: one\nCreated: two\n\xffUnusual encoding\n',
+        ]
+        for content in contents:
+            with self.subTest(content=content):
+                sig = self.sign(content)
+                result = verify_announcement(1, self.config, self.fixture_zip(content, sig))
+                self.assertTrue(result['ok'])
+                self.assertFalse(result['metadata_checked'])
+                self.assertIn('Signatures only', result['notice'])
+
+    def test_bare_heading_tampering_still_fails(self):
+        content = b'Announcement #3\nUnparsed content.\n'
+        sig = self.sign(content)
+        with self.assertRaises(VerificationError):
+            verify_announcement(3, self.config, self.fixture_zip(content + b'TAMPERED', sig, number=3))
+
+    def test_gpg_runs_before_display(self):
+        from unittest.mock import patch
+        content = b'Announcement #3\n'
+        with patch('verifier.verify_signatures', side_effect=VerificationError('bad signature')):
+            with patch('verifier.inspect_announcement') as display:
+                with self.assertRaises(VerificationError):
+                    verify_announcement(3, self.config, self.fixture_zip(content, b'bad', number=3))
+                display.assert_not_called()
+
+    def test_expired_revoked_and_invalid_gpg_statuses_still_fail(self):
+        from unittest.mock import patch
+        import verifier
+        real_gpg = verifier._gpg
+        for status in ('BADSIG', 'ERRSIG', 'NO_PUBKEY', 'EXPSIG', 'EXPKEYSIG',
+                       'REVKEYSIG', 'KEYREVOKED', 'KEYEXPIRED', 'SIGEXPIRED', 'FAILURE', 'ERROR'):
+            with self.subTest(status=status):
+                def fake_gpg(args, home, timeout=12):
+                    if '--verify' in args:
+                        return subprocess.CompletedProcess(args, 0, '[GNUPG:] ' + status + ' test\n', '')
+                    return real_gpg(args, home, timeout)
+                with patch('verifier._gpg', side_effect=fake_gpg):
+                    with self.assertRaises(VerificationError):
+                        verify_signatures(self.message, b'dummy', self.keys, self.config)
 
     def test_duplicate_signer_is_not_two(self):
         signature = self.sign(self.message, (0, 0))

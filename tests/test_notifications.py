@@ -64,7 +64,9 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(payload['schema_version'], 1)
         self.assertEqual(payload['event_type'], 'monad.announcement.verification')
         self.assertEqual(payload['announcement']['id'], 'mf-3')
-        self.assertEqual(payload['announcement']['severity'], 'RED')
+        self.assertIsNone(payload['announcement']['severity'])
+        self.assertEqual(payload['verification']['scope'], 'signatures_only')
+        self.assertFalse(payload['verification']['metadata_checked'])
         self.assertEqual(payload['verification']['status'], 'VERIFIED')
         self.assertEqual(len(payload['verification']['signers']), 2)
         self.assertEqual(payload['event_id'], req.get_header('X-monad-event-id'))
@@ -92,7 +94,9 @@ class DeliveryTests(unittest.TestCase):
 
     def test_telegram_plain_text(self):
         msg = TelegramNotifier.message(Event(3, 'VERIFIED', 'NEW', 'RED', signers=('A'*40, 'B'*40)))
-        self.assertIn('CODE RED', msg)
+        self.assertIn('GPG SIGNATURES VERIFIED', msg)
+        self.assertNotIn('CODE RED', msg)
+        self.assertIn('Signatures only', msg)
         self.assertIn('mf-3', msg)
         self.assertIn('2 distinct', msg)
 

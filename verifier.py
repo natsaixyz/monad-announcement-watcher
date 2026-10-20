@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -11,7 +12,6 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ARCHIVE_URL = "https://github.com/monad-crypto/mf-nodeops-comms/archive/refs/heads/main.zip"
@@ -23,9 +23,6 @@ MAX_SIGNATURE = 128 * 1024
 MAX_KEY = 128 * 1024
 MAX_KEYS = 40
 FPR_RE = re.compile(r"[A-F0-9]{40}\Z")
-ANNOUNCEMENT_RE = re.compile(r"^MF Announcement #([0-9]+)\s*$", re.MULTILINE)
-STAMP_RE = re.compile(r"^(Created|Expires):\s*(\S+)\s*$", re.MULTILINE)
-SEVERITY_RE = re.compile(r"\bCODE\s+(GREEN|ORANGE|RED)\b", re.IGNORECASE)
 URL_PATH_RE = re.compile(
     r"^/monad-crypto/mf-nodeops-comms/"
     r"(?:tree/main/announcements/mf-|blob/main/announcements/mf-)"
@@ -241,48 +238,19 @@ def verify_signatures(message: bytes, signature: bytes, keys: list[bytes], confi
         return sorted(valid)
 
 
-def _timestamp(value: str) -> datetime:
-    value = value.strip()
-    if value.endswith("UTC"):
-        value = value[:-3] + "Z"  # Monad currently publishes an 'UTC' suffix.
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        raise VerificationError("Invalid creation/expiry timestamp in the signed announcement.") from None
-    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
-        raise VerificationError("Announcement timestamps must be UTC.")
-    return parsed.astimezone(timezone.utc)
-
-
 def inspect_announcement(message: bytes, number: int) -> dict:
-    try:
-        content = message.decode("utf-8", errors="strict")
-    except UnicodeDecodeError:
-        raise VerificationError("Signed announcement is not UTF-8 text.") from None
-    found = ANNOUNCEMENT_RE.findall(content)
-    if len(found) != 1 or int(found[0]) != number:
-        raise VerificationError("Signed announcement index does not match the requested GitHub folder.")
-    stamps: dict[str, datetime] = {}
-    for key, raw in STAMP_RE.findall(content):
-        if key in stamps:
-            raise VerificationError(f"Duplicate {key} timestamp in signed announcement.")
-        stamps[key] = _timestamp(raw)
-    if "Created" not in stamps:
-        raise VerificationError("Signed announcement has no UTC Created timestamp.")
-    now = datetime.now(timezone.utc)
-    if stamps["Created"] > now + timedelta(minutes=5):
-        raise VerificationError("Signed announcement claims a creation time in the future.")
-    if "Expires" in stamps and now >= stamps["Expires"]:
-        raise VerificationError("Signed announcement has expired. Do not act on it.")
-    severities = set(x.upper() for x in SEVERITY_RE.findall(content))
-    if len(severities) > 1:
-        raise VerificationError("Multiple conflicting severity codes in the signed announcement.")
+    """Display envelope only; no announcement-text parsing or acceptance rules.
+
+    The number identifies the repository folder, not an authenticated claim in
+    the message. The original bytes are passed to GPG before this function.
+    Legacy metadata fields remain empty for API compatibility.
+    """
     return {
         "number": number,
-        "created": stamps["Created"].strftime("%Y-%m-%d %H:%M UTC"),
-        "expires": stamps["Expires"].strftime("%Y-%m-%d %H:%M UTC") if "Expires" in stamps else None,
-        "severity": next(iter(severities), "UNCLASSIFIED"),
-        "message": content,
+        "created": "",
+        "expires": None,
+        "severity": "UNCLASSIFIED",
+        "message": message.decode("utf-8", errors="replace"),
     }
 
 
@@ -291,14 +259,19 @@ def verify_announcement(number: int, config: dict, archive_bytes: bytes | None =
         raise VerificationError("Invalid MF announcement number.")
     archive = archive_bytes if archive_bytes is not None else download_archive()
     message, signature, public_keys = repository_files(archive, number)
-    # Validate the *signed* text, not the URL or metadata, before returning any success.
-    metadata = inspect_announcement(message, number)
+    # Exact downloaded bytes. GPG + pinned distinct signer checks decide success.
     signers = verify_signatures(message, signature, public_keys, config)
     return {
-        **metadata,
+        **inspect_announcement(message, number),
         "ok": True,
         "signers": signers,
+        "verification_scope": "signatures_only",
+        "metadata_checked": False,
+        "number_source": "repository_folder",
+        "message_sha256": hashlib.sha256(message).hexdigest(),
         "github_url": OFFICIAL_BASE + str(number),
         "fingerprint_source": FINGERPRINT_SOURCE,
-        "notice": "Verification confirms signatures against this installation's pinned keys. Trust this host only if you trust its operator; independent local verification is recommended for critical actions.",
+        "notice": "Signatures only: check the signed message's identity, dates, expiry and instructions yourself. "
+                  "The folder number is not authenticated by this check. "
+                  "Hosted results require trust in the operator; verify locally before critical actions.",
     }
